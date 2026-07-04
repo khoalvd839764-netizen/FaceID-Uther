@@ -1,0 +1,15 @@
+build/
+build_*/
+UpdaeLog/
+.vscode/
+
+*.user
+*.userosscache
+*.suo
+*.ncb
+*.obj
+*.pdb
+*.ilk
+*.log
+*.tmp
+*.cache
