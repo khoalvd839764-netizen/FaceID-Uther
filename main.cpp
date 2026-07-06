@@ -33,17 +33,21 @@
 #include <QFrame>           // Qt: Widget khung có thể tùy chỉnh border
 #include <QLineEdit>        // Qt: Ô nhập văn bản 1 dòng
 #include <QComboBox>        // Qt: Danh sách thả xuống (dropdown)
+#include <QCheckBox>        // Qt: Hộp kiểm (checkbox)
 #include <QListWidget>      // Qt: Danh sách widget (khai báo lại - không ảnh hưởng)
 #include <QFileDialog>      // Qt: Hộp thoại chọn file/thư mục
 #include <QMessageBox>      // Qt: Hộp thoại thông báo (info, warning, error, question)
 #include <QPixmap>          // Qt: Chứa và xử lý dữ liệu ảnh để hiển thị
 #include <QDateTime>        // Qt: Xử lý ngày giờ (lấy thời gian hiện tại, format...)
+#include "backend/Exporter.h" // Chức năng kết xuất xuất báo cáo PDF
 #include <QScrollArea>      // Qt: Vùng có thể cuộn khi nội dung vượt kích thước
 #include <QDialog>          // Qt: Cửa sổ dialog modal (chặn tương tác với cửa sổ cha)
 #include <QFormLayout>      // Qt: Layout form (label + input field xếp theo cặp)
 #include <QFileInfo>        // Qt: Lấy thông tin về file (tên, kích thước, đường dẫn...)
 #include <QTimer>           // Qt: Bộ đếm thời gian (dùng khởi tạo trễ và FPS camera)
 #include <QDir>             // Qt: Thao tác với thư mục (tạo, tìm kiếm, đường dẫn...)
+#include <QSqlQuery>        // Qt: Thực thi truy vấn SQL
+#include <QSqlError>        // Qt: Xử lý lỗi SQLite
 #include <QDebug>           // Qt: Xuất log debug ra console
 #include <QStackedWidget>   // Qt: Widget chứa nhiều trang, hiển thị 1 trang tại 1 thời điểm
 #include <QDateEdit>        // Qt: Ô nhập ngày tháng với calendar popup
@@ -536,7 +540,9 @@ bool showAddStudentDialog(QWidget *parent, const QString &preFilledClassCode = "
 // ============================================================================
 void refreshClassGrid(QGridLayout *gridLayout, QWidget *parentWindow);
 void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout);
+void showConfigureScheduleDialog(QWidget *parent, const QString &maLop, QGridLayout *gridLayout);
 void showClassDetailsDialog(QWidget *parent, const QString &classCode, const QString &className, QGridLayout *gridLayout);
+void showExportPdfDialog(QWidget *parent);
 void refreshLateAbsentReport(QVBoxLayout *reportLayout, QWidget *parentWindow);
 void triggerReportRefresh(QWidget *parentWindow);
 bool showLoginDialog(QString &outUsername, QWidget *parent = nullptr);
@@ -611,14 +617,23 @@ void refreshClassGrid(QGridLayout *gridLayout, QWidget *parentWindow)
         btnMenu->setStyleSheet("QPushButton { color: #64748B; font-size: 14px; font-weight: bold; border: none; background: transparent; } QPushButton:hover { color: #E2E8F0; }");
         btnMenu->setCursor(Qt::PointingHandCursor); // Đổi con trỏ thành tay khi hover
         
-        // Tạo context menu với action "Xóa lớp học này"
+        // Tạo context menu với action Thiết lập lịch học và Xóa
         QMenu *menu = new QMenu(card);
         menu->setStyleSheet(R"(
-            QMenu { background-color: #1E293B; border: 1px solid #334155; color: #E2E8F0; }
-            QMenu::item:selected { background-color: #EF4444; color: white; }
+            QMenu { background-color: #1E293B; border: 1px solid #334155; color: #E2E8F0; padding: 4px; }
+            QMenu::item:selected { background-color: #3B82F6; color: white; }
         )");
 
-        QAction *actDelete = menu->addAction("Xóa lớp học này");
+        QAction *actSchedule = menu->addAction("📅 Thiết lập lịch học");
+        QAction *actDelete = menu->addAction("❌ Xóa lớp học này");
+
+        // Đổi màu hover của nút xóa thành đỏ để cảnh báo trực quan
+        actDelete->setProperty("isDelete", true);
+
+        // Kết nối action thiết lập lịch học
+        QObject::connect(actSchedule, &QAction::triggered, [c, parentWindow, gridLayout]() {
+            showConfigureScheduleDialog(parentWindow, c.maLop, gridLayout);
+        });
 
         // Kết nối action xóa với lambda yêu cầu xác nhận trước khi xóa
         QObject::connect(actDelete, &QAction::triggered, [c, parentWindow, gridLayout]() {
@@ -775,7 +790,7 @@ void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout)
     // Tạo dialog tạo lớp mới
     QDialog dialog(parent);
     dialog.setWindowTitle("Tạo Lớp Học Mới");
-    dialog.setFixedSize(400, 380);
+    dialog.setFixedSize(400, 260);
     dialog.setStyleSheet(R"(
         QDialog {
             background-color: #1E293B;
@@ -786,7 +801,7 @@ void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout)
             color: #E2E8F0;
             font-weight: bold;
         }
-        QLineEdit, QDateEdit, QTimeEdit {
+        QLineEdit {
             padding: 6px;
             border: 1px solid #475569;
             border-radius: 6px;
@@ -794,7 +809,7 @@ void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout)
             background-color: #0F172A;
             color: #FFFFFF;
         }
-        QLineEdit:focus, QDateEdit:focus, QTimeEdit:focus {
+        QLineEdit:focus {
             border: 1px solid #3B82F6;
         }
     )");
@@ -820,25 +835,10 @@ void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout)
     QLineEdit *inputSiSo = new QLineEdit(&dialog);
     inputSiSo->setPlaceholderText("Ví dụ: 45");
 
-    // QDateEdit: Widget chọn ngày với calendar popup (KeepAspectRatio)
-    QDateEdit *inputNgayHoc = new QDateEdit(QDate::currentDate(), &dialog);
-    inputNgayHoc->setCalendarPopup(true);        // Bật calendar popup khi click
-    inputNgayHoc->setDisplayFormat("dd/MM/yyyy"); // Hiển thị theo định dạng Việt Nam
-
-    // QTimeEdit: Widget chọn giờ theo định dạng 24 giờ
-    QTimeEdit *inputGioBatDau = new QTimeEdit(QTime(8, 0), &dialog);  // Mặc định 08:00
-    inputGioBatDau->setDisplayFormat("HH:mm");
-
-    QTimeEdit *inputGioKetThuc = new QTimeEdit(QTime(10, 30), &dialog); // Mặc định 10:30
-    inputGioKetThuc->setDisplayFormat("HH:mm");
-
     formLayout->addRow("Mã lớp học:", inputMaLop);
     formLayout->addRow("Tên lớp/môn học:", inputTenLop);
     formLayout->addRow("Phòng học:", inputPhongHoc);
     formLayout->addRow("Sĩ số dự kiến:", inputSiSo);
-    formLayout->addRow("Ngày học:", inputNgayHoc);
-    formLayout->addRow("Giờ bắt đầu:", inputGioBatDau);
-    formLayout->addRow("Giờ kết thúc:", inputGioKetThuc);
     layout->addLayout(formLayout);
 
     // Hàng nút Hủy / Tạo lớp
@@ -889,10 +889,6 @@ void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout)
         QString tenLop   = inputTenLop->text().trimmed();
         QString phongHoc = inputPhongHoc->text().trimmed();
         int siSo         = inputSiSo->text().trimmed().toInt(); // Chuyển chuỗi -> số nguyên
-        // Định dạng ngày về ISO 8601 để lưu vào SQLite
-        QString ngayHoc  = inputNgayHoc->date().toString("yyyy-MM-dd");
-        QString gioBatDau = inputGioBatDau->time().toString("HH:mm");
-        QString gioKetThuc = inputGioKetThuc->time().toString("HH:mm");
 
         // Kiểm tra các trường bắt buộc không được rỗng
         if (maLop.isEmpty() || tenLop.isEmpty() || phongHoc.isEmpty()) {
@@ -906,9 +902,9 @@ void showCreateClassDialog(QWidget *parent, QGridLayout *gridLayout)
             return;
         }
 
-        // Lưu lớp học mới vào SQLite
-        if (Database::createClass(maLop, tenLop, phongHoc, siSo, ngayHoc, gioBatDau, gioKetThuc)) {
-            QMessageBox::information(&dialog, "Thành công", "Tạo lớp học mới thành công!");
+        // Lưu lớp học mới vào SQLite với ngày học và giờ mặc định trống
+        if (Database::createClass(maLop, tenLop, phongHoc, siSo, "", "", "")) {
+            QMessageBox::information(&dialog, "Thành công", "Tạo lớp học mới thành công! Vui lòng cấu hình lịch học cho lớp.");
             // Làm mới giao diện sau khi tạo thành công
             refreshClassGrid(gridLayout, parent);  // Cập nhật lưới thẻ lớp
             triggerReportRefresh(parent);          // Cập nhật báo cáo vắng/trễ
@@ -1194,7 +1190,7 @@ void refreshLateAbsentReport(QVBoxLayout *reportLayout, QWidget *parentWindow)
                     if (checkTime > sTime) {
                         // Điểm danh sau giờ bắt đầu = đi trễ
                         isLate = true;
-                        timeStr = checkTime.toString("hh:mm:ss"); // Lưu giờ điểm danh thực tế
+                        timeStr = checkTime.toString("HH:mm:ss"); // Lưu giờ điểm danh thực tế
                     }
                 }
 
@@ -2085,7 +2081,33 @@ int main(int argc, char *argv[])
     // Label phụ hiển thị phạm vi thời gian báo cáo
     QLabel *lblCurrentDate = new QLabel("7 ngày gần nhất", pageAttendanceLogs);
     lblCurrentDate->setStyleSheet("font-size: 13px; font-weight: bold; color: #EF4444;");
+
+    // Nút "Xuất báo cáo PDF" màu xanh lá cây đồng bộ
+    QPushButton *btnExportPdf = new QPushButton("📄 Xuất báo cáo PDF", pageAttendanceLogs);
+    btnExportPdf->setStyleSheet(R"(
+        QPushButton {
+            background-color: #10B981;
+            color: white;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 12px;
+            border: none;
+        }
+        QPushButton:hover {
+            background-color: #059669;
+        }
+    )");
+    btnExportPdf->setCursor(Qt::PointingHandCursor);
+
+    // Sự kiện click nút Xuất PDF
+    QObject::connect(btnExportPdf, &QPushButton::clicked, [&]() {
+        showExportPdfDialog(&mainWindow);
+    });
+
     schedHeaderLayout->addStretch();
+    schedHeaderLayout->addWidget(btnExportPdf);
+    schedHeaderLayout->addSpacing(10);
     schedHeaderLayout->addWidget(lblCurrentDate);
     logsPageLayout->addLayout(schedHeaderLayout);
 
@@ -2631,7 +2653,7 @@ int main(int argc, char *argv[])
 
                 QWidget *itemWidget = createAttendanceItemWidget(
                     rec.hoTen, rec.mssv, svMaLop,
-                    rec.checkInTime.toString("hh:mm:ss"),
+                    rec.checkInTime.toString("HH:mm:ss"),
                     lateMin > 0 ? "ĐI TRỄ" : "ĐÃ XÁC THỰC",
                     lateMin > 0 ? "#F59E0B" : "#3B82F6",
                     lateMin,
@@ -2782,36 +2804,55 @@ int main(int argc, char *argv[])
                 int lateMinutes = 0;
                 QString svMaLop = comboClass->currentData().toString(); // Lớp đang chọn
 
+                // Lấy thứ trong tuần viết tắt của ngày hôm nay
+                int dayNum = QDate::currentDate().dayOfWeek();
+                QString dayStr = "";
+                switch (dayNum) {
+                    case 1: dayStr = "Mon"; break;
+                    case 2: dayStr = "Tue"; break;
+                    case 3: dayStr = "Wed"; break;
+                    case 4: dayStr = "Thu"; break;
+                    case 5: dayStr = "Fri"; break;
+                    case 6: dayStr = "Sat"; break;
+                    case 7: dayStr = "Sun"; break;
+                }
+
                 if (!svMaLop.isEmpty()) {
-                    // Có chọn lớp cụ thể: Tìm giờ học của lớp đó hôm nay
+                    // Có chọn lớp cụ thể: Tìm giờ học của lớp đó hôm nay (so khớp thứ trong tuần)
                     auto allClasses = Database::loadAllClasses();
-                    QString todayStr = QDate::currentDate().toString("yyyy-MM-dd");
                     for (const auto &cls : allClasses) {
-                        if (cls.maLop == svMaLop && cls.ngayHoc == todayStr) {
-                            QTime startTime = QTime::fromString(cls.gioBatDau, "HH:mm");
-                            QTime nowTime   = QTime::currentTime();
-                            if (nowTime > startTime) {
-                                lateMinutes = startTime.secsTo(nowTime) / 60;
+                        if (cls.maLop == svMaLop && cls.ngayHoc.split(",").contains(dayStr)) {
+                            // Chỉ tính trễ nếu hôm nay lớn hơn hoặc bằng ngày tạo lớp
+                            QDate creationDate = QDate::fromString(cls.ngayTao, "yyyy-MM-dd");
+                            if (!creationDate.isValid() || QDate::currentDate() >= creationDate) {
+                                QTime startTime = QTime::fromString(cls.gioBatDau, "HH:mm");
+                                QTime nowTime   = QTime::currentTime();
+                                if (nowTime > startTime) {
+                                    lateMinutes = startTime.secsTo(nowTime) / 60;
+                                }
                             }
                             break;
                         }
                     }
                 } else {
-                    // Chế độ "Tất cả lớp": Tìm lớp học của sinh viên này và kiểm tra
+                    // Chế độ "Tất cả lớp": Tìm lớp học của sinh viên này và kiểm tra thứ học
                     auto allClasses = Database::loadAllClasses();
-                    QString todayStr = QDate::currentDate().toString("yyyy-MM-dd");
                     for (const auto &cls : allClasses) {
-                        if (cls.ngayHoc == todayStr) {
-                            auto svList = Database::loadStudentsByClass(cls.maLop);
-                            for (const auto &sv : svList) {
-                                if (sv.mssv == res.mssv) {
-                                    svMaLop = cls.maLop;
-                                    QTime startTime = QTime::fromString(cls.gioBatDau, "HH:mm");
-                                    QTime nowTime   = QTime::currentTime();
-                                    if (nowTime > startTime) {
-                                        lateMinutes = startTime.secsTo(nowTime) / 60;
+                        if (cls.ngayHoc.split(",").contains(dayStr)) {
+                            // Chỉ tính trễ nếu hôm nay lớn hơn hoặc bằng ngày tạo lớp
+                            QDate creationDate = QDate::fromString(cls.ngayTao, "yyyy-MM-dd");
+                            if (!creationDate.isValid() || QDate::currentDate() >= creationDate) {
+                                auto svList = Database::loadStudentsByClass(cls.maLop);
+                                for (const auto &sv : svList) {
+                                    if (sv.mssv == res.mssv) {
+                                        svMaLop = cls.maLop;
+                                        QTime startTime = QTime::fromString(cls.gioBatDau, "HH:mm");
+                                        QTime nowTime   = QTime::currentTime();
+                                        if (nowTime > startTime) {
+                                            lateMinutes = startTime.secsTo(nowTime) / 60;
+                                        }
+                                        break;
                                     }
-                                    break;
                                 }
                             }
                             if (!svMaLop.isEmpty()) break;
@@ -2840,7 +2881,7 @@ int main(int argc, char *argv[])
 
                 QWidget *itemWidget = createAttendanceItemWidget(
                     res.hoTen, res.mssv, svMaLop,
-                    QDateTime::currentDateTime().toString("hh:mm:ss"),
+                    QDateTime::currentDateTime().toString("HH:mm:ss"),
                     statusText, statusColor,
                     lateMinutes,
                     imgFileName
@@ -3021,3 +3062,383 @@ int main(int argc, char *argv[])
 
     return result; // Trả về mã thoát (0 = thành công)
 }
+
+// -----------------------------------------------------------------------
+// showConfigureScheduleDialog: Hộp thoại thiết lập lịch học riêng biệt
+// -----------------------------------------------------------------------
+void showConfigureScheduleDialog(QWidget *parent, const QString &maLop, QGridLayout *gridLayout)
+{
+    // Tìm thông tin lớp học hiện tại để điền sẵn vào giao diện (pre-fill)
+    auto allClasses = Database::loadAllClasses();
+    Database::ClassData cls;
+    bool found = false;
+    for (const auto &c : allClasses) {
+        if (c.maLop == maLop) {
+            cls = c;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        QMessageBox::critical(parent, "Lỗi", "Không tìm thấy thông tin lớp học " + maLop);
+        return;
+    }
+
+    QDialog dialog(parent);
+    dialog.setWindowTitle("Thiết Lập Lịch Học - " + cls.tenLop);
+    dialog.setFixedSize(500, 320);
+    dialog.setStyleSheet(R"(
+        QDialog {
+            background-color: #1E293B;
+            border: 1px solid #334155;
+        }
+        QLabel {
+            font-size: 12px;
+            color: #E2E8F0;
+            font-weight: bold;
+        }
+        QCheckBox {
+            color: #E2E8F0;
+            font-size: 11px;
+        }
+        QTimeEdit {
+            padding: 6px;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            font-size: 12px;
+            background-color: #0F172A;
+            color: #FFFFFF;
+        }
+        QTimeEdit:focus {
+            border: 1px solid #3B82F6;
+        }
+    )");
+
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+    layout->setSpacing(16);
+    layout->setContentsMargins(24, 24, 24, 24);
+
+    // Tiêu đề nhỏ
+    QLabel *lblTitle = new QLabel(QString("Cấu hình lịch học lớp: %1 (%2)").arg(cls.tenLop, cls.maLop), &dialog);
+    lblTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #3B82F6;");
+    layout->addWidget(lblTitle);
+
+    // Khối 1: Chọn ngày học (7 Checkbox thứ viết tắt)
+    QLabel *lblDays = new QLabel("Chọn các ngày học trong tuần:", &dialog);
+    layout->addWidget(lblDays);
+
+    QHBoxLayout *daysLayout = new QHBoxLayout();
+    daysLayout->setSpacing(8);
+
+    QCheckBox *chkMon = new QCheckBox("Thứ 2", &dialog);
+    QCheckBox *chkTue = new QCheckBox("Thứ 3", &dialog);
+    QCheckBox *chkWed = new QCheckBox("Thứ 4", &dialog);
+    QCheckBox *chkThu = new QCheckBox("Thứ 5", &dialog);
+    QCheckBox *chkFri = new QCheckBox("Thứ 6", &dialog);
+    QCheckBox *chkSat = new QCheckBox("Thứ 7", &dialog);
+    QCheckBox *chkSun = new QCheckBox("Chủ Nhật", &dialog);
+
+    daysLayout->addWidget(chkMon);
+    daysLayout->addWidget(chkTue);
+    daysLayout->addWidget(chkWed);
+    daysLayout->addWidget(chkThu);
+    daysLayout->addWidget(chkFri);
+    daysLayout->addWidget(chkSat);
+    daysLayout->addWidget(chkSun);
+    layout->addLayout(daysLayout);
+
+    // Tải dữ liệu các thứ học đã cấu hình trước đó để tích chọn sẵn
+    QStringList currentDays = cls.ngayHoc.split(",");
+    if (currentDays.contains("Mon")) chkMon->setChecked(true);
+    if (currentDays.contains("Tue")) chkTue->setChecked(true);
+    if (currentDays.contains("Wed")) chkWed->setChecked(true);
+    if (currentDays.contains("Thu")) chkThu->setChecked(true);
+    if (currentDays.contains("Fri")) chkFri->setChecked(true);
+    if (currentDays.contains("Sat")) chkSat->setChecked(true);
+    if (currentDays.contains("Sun")) chkSun->setChecked(true);
+
+    // Khối 2: Chọn khung giờ học (Giờ bắt đầu - Giờ kết thúc)
+    QHBoxLayout *timeLayout = new QHBoxLayout();
+    timeLayout->setSpacing(20);
+
+    QVBoxLayout *startLayout = new QVBoxLayout();
+    startLayout->setSpacing(4);
+    startLayout->addWidget(new QLabel("Giờ bắt đầu học:", &dialog));
+    QTimeEdit *timeStart = new QTimeEdit(&dialog);
+    timeStart->setDisplayFormat("HH:mm");
+    if (!cls.gioBatDau.isEmpty()) {
+        timeStart->setTime(QTime::fromString(cls.gioBatDau, "HH:mm"));
+    } else {
+        timeStart->setTime(QTime(8, 0)); // Mặc định 08:00
+    }
+    startLayout->addWidget(timeStart);
+
+    QVBoxLayout *endLayout = new QVBoxLayout();
+    endLayout->setSpacing(4);
+    endLayout->addWidget(new QLabel("Giờ kết thúc học:", &dialog));
+    QTimeEdit *timeEnd = new QTimeEdit(&dialog);
+    timeEnd->setDisplayFormat("HH:mm");
+    if (!cls.gioKetThuc.isEmpty()) {
+        timeEnd->setTime(QTime::fromString(cls.gioKetThuc, "HH:mm"));
+    } else {
+        timeEnd->setTime(QTime(10, 30)); // Mặc định 10:30
+    }
+    endLayout->addWidget(timeEnd);
+
+    timeLayout->addLayout(startLayout);
+    timeLayout->addLayout(endLayout);
+    layout->addLayout(timeLayout);
+
+    // Khối 3: Hàng nút Hủy / Lưu
+    QHBoxLayout *btnLayout = new QHBoxLayout();
+    btnLayout->addStretch();
+
+    QPushButton *btnCancel = new QPushButton("Hủy", &dialog);
+    btnCancel->setStyleSheet(R"(
+        QPushButton {
+            background-color: #334155;
+            color: #94A3B8;
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #475569;
+        }
+    )");
+
+    QPushButton *btnSave = new QPushButton("Lưu lịch học", &dialog);
+    btnSave->setStyleSheet(R"(
+        QPushButton {
+            background-color: #10B981;
+            color: white;
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #059669;
+        }
+    )");
+
+    btnLayout->addWidget(btnCancel);
+    btnLayout->addWidget(btnSave);
+    layout->addLayout(btnLayout);
+
+    QObject::connect(btnCancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+    // Xử lý sự kiện lưu lịch học
+    QObject::connect(btnSave, &QPushButton::clicked, [&]() {
+        // Thu thập các checkbox ngày
+        QStringList selectedDays;
+        if (chkMon->isChecked()) selectedDays.append("Mon");
+        if (chkTue->isChecked()) selectedDays.append("Tue");
+        if (chkWed->isChecked()) selectedDays.append("Wed");
+        if (chkThu->isChecked()) selectedDays.append("Thu");
+        if (chkFri->isChecked()) selectedDays.append("Fri");
+        if (chkSat->isChecked()) selectedDays.append("Sat");
+        if (chkSun->isChecked()) selectedDays.append("Sun");
+
+        if (selectedDays.isEmpty()) {
+            QMessageBox::warning(&dialog, "Thông báo", "Vui lòng chọn ít nhất một ngày học trong tuần!");
+            return;
+        }
+
+        QString ngayHoc = selectedDays.join(",");
+        QString gioBatDau = timeStart->time().toString("HH:mm");
+        QString gioKetThuc = timeEnd->time().toString("HH:mm");
+
+        if (timeStart->time() >= timeEnd->time()) {
+            QMessageBox::warning(&dialog, "Thông báo", "Giờ bắt đầu học phải nhỏ hơn giờ kết thúc học!");
+            return;
+        }
+
+        // Cập nhật lịch học vào database
+        if (Database::updateClassSchedule(maLop, ngayHoc, gioBatDau, gioKetThuc)) {
+            QMessageBox::information(&dialog, "Thành công", "Đã cập nhật lịch học thành công!");
+            refreshClassGrid(gridLayout, parent); // Cập nhật lại Grid lớp học
+            triggerReportRefresh(parent);         // Làm mới báo cáo vắng/trễ
+            dialog.accept();
+        } else {
+            QMessageBox::critical(&dialog, "Lỗi", "Không thể lưu lịch học mới vào SQLite.");
+        }
+    });
+
+    dialog.exec();
+}
+
+// -----------------------------------------------------------------------
+// showExportPdfDialog: Hộp thoại cấu hình xuất báo cáo PDF thông minh
+// -----------------------------------------------------------------------
+void showExportPdfDialog(QWidget *parent)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle("Xuất Báo Cáo Điểm Danh PDF");
+    dialog.setFixedSize(420, 280);
+    dialog.setStyleSheet(R"(
+        QDialog {
+            background-color: #1E293B;
+            border: 1px solid #334155;
+        }
+        QLabel {
+            font-size: 12px;
+            color: #E2E8F0;
+            font-weight: bold;
+        }
+        QComboBox, QLineEdit {
+            padding: 6px;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            font-size: 12px;
+            background-color: #0F172A;
+            color: #FFFFFF;
+        }
+        QComboBox:focus, QLineEdit:focus {
+            border: 1px solid #10B981;
+        }
+    )");
+
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+    layout->setSpacing(16);
+    layout->setContentsMargins(20, 20, 20, 20);
+
+    QFormLayout *formLayout = new QFormLayout();
+    formLayout->setSpacing(12);
+
+    QComboBox *comboClass = new QComboBox(&dialog);
+    QComboBox *comboDate = new QComboBox(&dialog);
+    QLineEdit *inputFilename = new QLineEdit(&dialog);
+    inputFilename->setPlaceholderText("Ví dụ: bao_cao_diem_danh");
+
+    // Load danh sách lớp học vào ComboBox
+    auto allClasses = Database::loadAllClasses();
+    for (const auto &c : allClasses) {
+        comboClass->addItem(QString("%1 - %2").arg(c.maLop, c.tenLop), c.maLop);
+    }
+
+    // Hàm tự động tải các ngày thực tế có dữ liệu điểm danh của lớp đó
+    auto updateDatesForClass = [&](const QString &maLop) {
+        comboDate->clear();
+        QSqlQuery query;
+        // Lấy danh sách ngày có dữ liệu điểm danh thực tế
+        query.prepare(R"(
+            SELECT DISTINCT date(CheckInTime) as DateVal 
+            FROM AttendanceHistory 
+            WHERE MSSV IN (SELECT MSSV FROM Students WHERE MaLop = :maLop) 
+            ORDER BY DateVal DESC
+        )");
+        query.bindValue(":maLop", maLop);
+        
+        if (query.exec()) {
+            while (query.next()) {
+                QString dStr = query.value("DateVal").toString();
+                // Format ngày hiển thị dd/MM/yyyy
+                QDate date = QDate::fromString(dStr, "yyyy-MM-dd");
+                if (date.isValid()) {
+                    comboDate->addItem(date.toString("dd/MM/yyyy"), dStr);
+                } else {
+                    comboDate->addItem(dStr, dStr);
+                }
+            }
+        }
+        
+        if (comboDate->count() == 0) {
+            comboDate->addItem("Chưa có ngày điểm danh nào", "");
+        }
+    };
+
+    // Lắng nghe sự kiện đổi lớp học để tự động load lại danh sách ngày học thực tế
+    QObject::connect(comboClass, &QComboBox::currentIndexChanged, [&]() {
+        QString maLop = comboClass->currentData().toString();
+        updateDatesForClass(maLop);
+        inputFilename->setText(QString("BaoCao_%1_%2").arg(maLop, QDate::currentDate().toString("ddMMyyyy")));
+    });
+
+    // Load ngày học ban đầu cho lớp học đầu tiên
+    if (comboClass->count() > 0) {
+        updateDatesForClass(comboClass->currentData().toString());
+        inputFilename->setText(QString("BaoCao_%1_%2").arg(comboClass->currentData().toString(), QDate::currentDate().toString("ddMMyyyy")));
+    }
+
+    formLayout->addRow("Chọn lớp học:", comboClass);
+    formLayout->addRow("Chọn ngày học:", comboDate);
+    formLayout->addRow("Tên file gợi ý:", inputFilename);
+    layout->addLayout(formLayout);
+
+    // Hàng nút hành động
+    QHBoxLayout *btnLayout = new QHBoxLayout();
+    btnLayout->addStretch();
+
+    QPushButton *btnCancel = new QPushButton("Hủy", &dialog);
+    btnCancel->setStyleSheet(R"(
+        QPushButton {
+            background-color: #334155;
+            color: #94A3B8;
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #475569;
+        }
+    )");
+
+    QPushButton *btnExport = new QPushButton("Xuất PDF", &dialog);
+    btnExport->setStyleSheet(R"(
+        QPushButton {
+            background-color: #10B981;
+            color: white;
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #059669;
+        }
+    )");
+
+    btnLayout->addWidget(btnCancel);
+    btnLayout->addWidget(btnExport);
+    layout->addLayout(btnLayout);
+
+    QObject::connect(btnCancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+    // Sự kiện click nút Xuất
+    QObject::connect(btnExport, &QPushButton::clicked, [&]() {
+        QString maLop = comboClass->currentData().toString();
+        QString dateVal = comboDate->currentData().toString(); // Định dạng YYYY-MM-DD
+        QString fn = inputFilename->text().trimmed();
+
+        if (maLop.isEmpty()) {
+            QMessageBox::warning(&dialog, "Thông báo", "Vui lòng chọn lớp học!");
+            return;
+        }
+        if (dateVal.isEmpty()) {
+            QMessageBox::warning(&dialog, "Thông báo", "Không có dữ liệu điểm danh thực tế để xuất!");
+            return;
+        }
+        if (fn.isEmpty()) fn = "bao_cao_diem_danh";
+
+        // Mở hộp thoại lưu tệp tin
+        QString defaultPath = QDir::toNativeSeparators(QDir::homePath() + "/" + fn + ".pdf");
+        QString savePath = QFileDialog::getSaveFileName(&dialog, "Lưu báo cáo PDF", defaultPath, "Tệp PDF (*.pdf)");
+
+        if (savePath.isEmpty()) return; // Người dùng hủy chọn
+
+        // Tiến hành xuất PDF
+        QString outErr = "";
+        if (Exporter::exportAttendanceToPdf(savePath, maLop, dateVal, outErr)) {
+            QMessageBox::information(&dialog, "Thành công", "Đã xuất báo cáo PDF thành công!");
+            dialog.accept();
+        } else {
+            QMessageBox::critical(&dialog, "Lỗi", "Không thể xuất file PDF:\n" + outErr);
+        }
+    });
+
+    dialog.exec();
+}
+

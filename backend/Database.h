@@ -65,6 +65,7 @@ namespace Database {
         QString gioBatDau;   // Giờ bắt đầu (HH:mm)
         QString gioKetThuc;  // Giờ kết thúc (HH:mm)
         int trangThai;       // Trạng thái lớp học (0: Chưa hoàn thành, 1: Đã hoàn thành)
+        QString ngayTao;     // Ngày tạo lớp học (YYYY-MM-DD)
     };
 
 
@@ -128,7 +129,14 @@ namespace Database {
                      int siSoDuKien,
                      const QString &ngayHoc = "",
                      const QString &gioBatDau = "",
-                     const QString &gioKetThuc = "");
+                     const QString &gioKetThuc = "",
+                     const QString &ngayTao = "");
+
+    // Cập nhật lịch học lớp học
+    bool updateClassSchedule(const QString &maLop,
+                             const QString &ngayHoc,
+                             const QString &gioBatDau,
+                             const QString &gioKetThuc);
 
     // Kiểm tra lớp học đã tồn tại chưa
     bool classExists(const QString &maLop);

@@ -137,7 +137,8 @@ namespace Database {
                 NgayHoc TEXT,
                 GioBatDau TEXT,
                 GioKetThuc TEXT,
-                TrangThai INTEGER DEFAULT 0
+                TrangThai INTEGER DEFAULT 0,
+                NgayTao TEXT
             );
         )";
         if (!query.exec(createClasses)) {
@@ -155,6 +156,7 @@ namespace Database {
         query.exec("ALTER TABLE Classes ADD COLUMN GioBatDau TEXT;");
         query.exec("ALTER TABLE Classes ADD COLUMN GioKetThuc TEXT;");
         query.exec("ALTER TABLE Classes ADD COLUMN TrangThai INTEGER DEFAULT 0;");
+        query.exec("ALTER TABLE Classes ADD COLUMN NgayTao TEXT;");
 
         qDebug() << "[DB] Bảng Classes đã sẵn sàng.";
 
@@ -486,7 +488,7 @@ namespace Database {
         // Lấy thời gian hiện tại và định dạng thành ISO8601
         // Định dạng này cho phép SQLite so sánh ngày bằng hàm date()
         // Ví dụ: "2024-01-15 08:30:45"
-        QString nowStr = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
+        QString nowStr = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
 
         query.bindValue(":mssv", mssv);
         query.bindValue(":checkintime", nowStr);         // Thời gian điểm danh
@@ -569,7 +571,7 @@ namespace Database {
             r.mssv              = query.value("MSSV").toString();
             r.hoTen             = query.value("HoTen").toString();
             // Phân tích chuỗi datetime từ SQLite sang QDateTime
-            r.checkInTime       = QDateTime::fromString(query.value("CheckInTime").toString(), "yyyy-MM-dd hh:mm:ss");
+            r.checkInTime       = QDateTime::fromString(query.value("CheckInTime").toString(), "yyyy-MM-dd HH:mm:ss");
             r.capturedImagePath = query.value("CapturedImagePath").toString();
             r.confidence        = query.value("Confidence").toDouble();
             records.push_back(r);
@@ -642,21 +644,30 @@ namespace Database {
                      int siSoDuKien,
                      const QString &ngayHoc,
                      const QString &gioBatDau,
-                     const QString &gioKetThuc)
+                     const QString &gioKetThuc,
+                     const QString &ngayTao)
     {
         if (!s_db.isOpen()) return false;
         QSqlQuery query;
+
+        // Nếu ngày tạo trống, tự động gán là ngày hiện tại (YYYY-MM-DD)
+        QString actualNgayTao = ngayTao;
+        if (actualNgayTao.isEmpty()) {
+            actualNgayTao = QDate::currentDate().toString("yyyy-MM-dd");
+        }
+
         // UPSERT tương tự syncStudent: Thêm mới hoặc cập nhật nếu MaLop trùng
         query.prepare(R"(
-            INSERT INTO Classes (MaLop, TenLop, PhongHoc, SiSoDuKien, NgayHoc, GioBatDau, GioKetThuc)
-            VALUES (:malop, :tenlop, :phonghoc, :sisodukien, :ngayhoc, :giobatdau, :giokethuc)
+            INSERT INTO Classes (MaLop, TenLop, PhongHoc, SiSoDuKien, NgayHoc, GioBatDau, GioKetThuc, NgayTao)
+            VALUES (:malop, :tenlop, :phonghoc, :sisodukien, :ngayhoc, :giobatdau, :giokethuc, :ngaytao)
             ON CONFLICT(MaLop) DO UPDATE SET
                 TenLop = excluded.TenLop,
                 PhongHoc = excluded.PhongHoc,
                 SiSoDuKien = excluded.SiSoDuKien,
                 NgayHoc = excluded.NgayHoc,
                 GioBatDau = excluded.GioBatDau,
-                GioKetThuc = excluded.GioKetThuc
+                GioKetThuc = excluded.GioKetThuc,
+                NgayTao = excluded.NgayTao
         )");
         query.bindValue(":malop", maLop);
         query.bindValue(":tenlop", tenLop);
@@ -665,6 +676,7 @@ namespace Database {
         query.bindValue(":ngayhoc", ngayHoc);
         query.bindValue(":giobatdau", gioBatDau);
         query.bindValue(":giokethuc", gioKetThuc);
+        query.bindValue(":ngaytao", actualNgayTao);
 
         if (!query.exec()) {
             qCritical() << "[DB] Lỗi tạo/đồng bộ lớp học (" << maLop << "):" << query.lastError().text();
@@ -708,7 +720,7 @@ namespace Database {
         if (!s_db.isOpen()) return classes;
 
         QSqlQuery query;
-        if (query.exec("SELECT MaLop, TenLop, PhongHoc, SiSoDuKien, NgayHoc, GioBatDau, GioKetThuc, TrangThai FROM Classes ORDER BY NgayHoc ASC, GioBatDau ASC")) {
+        if (query.exec("SELECT MaLop, TenLop, PhongHoc, SiSoDuKien, NgayHoc, GioBatDau, GioKetThuc, TrangThai, NgayTao FROM Classes ORDER BY NgayHoc ASC, GioBatDau ASC")) {
             while (query.next()) {
                 ClassData c;
                 c.maLop      = query.value("MaLop").toString();
@@ -719,6 +731,7 @@ namespace Database {
                 c.gioBatDau  = query.value("GioBatDau").toString();
                 c.gioKetThuc = query.value("GioKetThuc").toString();
                 c.trangThai  = query.value("TrangThai").toInt(); // 0=Chưa xong, 1=Đã xong
+                c.ngayTao    = query.value("NgayTao").toString();
                 classes.push_back(c);
             }
         } else {
@@ -849,7 +862,7 @@ namespace Database {
 
         if (query.exec() && query.next()) {
             // Tìm thấy bản ghi -> parse chuỗi datetime và trả về
-            return QDateTime::fromString(query.value(0).toString(), "yyyy-MM-dd hh:mm:ss");
+            return QDateTime::fromString(query.value(0).toString(), "yyyy-MM-dd HH:mm:ss");
         }
         // Không tìm thấy -> trả về QDateTime không hợp lệ (biểu thị vắng mặt)
         return QDateTime();
@@ -905,6 +918,30 @@ namespace Database {
             return query.value(0).toString() == password;
         }
         return false; // Username không tồn tại trong hệ thống
+    }
+
+    // -----------------------------------------------------------------------
+    // updateClassSchedule: Cập nhật lịch học (ngày học, giờ học) của lớp
+    // -----------------------------------------------------------------------
+    bool updateClassSchedule(const QString &maLop,
+                             const QString &ngayHoc,
+                             const QString &gioBatDau,
+                             const QString &gioKetThuc)
+    {
+        if (!s_db.isOpen()) return false;
+        QSqlQuery query;
+        query.prepare("UPDATE Classes SET NgayHoc = :ngayHoc, GioBatDau = :gioBatDau, GioKetThuc = :gioKetThuc WHERE MaLop = :maLop");
+        query.bindValue(":ngayHoc", ngayHoc);
+        query.bindValue(":gioBatDau", gioBatDau);
+        query.bindValue(":gioKetThuc", gioKetThuc);
+        query.bindValue(":maLop", maLop);
+
+        if (!query.exec()) {
+            qCritical() << "[DB] Lỗi cập nhật lịch học cho lớp" << maLop << ":" << query.lastError().text();
+            return false;
+        }
+        qDebug() << "[DB] Đã cập nhật lịch học thành công cho lớp" << maLop;
+        return true;
     }
 
 

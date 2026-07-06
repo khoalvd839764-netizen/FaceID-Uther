@@ -9,8 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # TÌM CÁC THƯ VIỆN CẦN THIẾT
 # ============================================================================
 
-# Qt6: Core (nền tảng), Widgets (giao diện), Sql (SQLite)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Sql)
+# Qt6: Core (nền tảng), Widgets (giao diện), Sql (SQLite), PrintSupport (xuất PDF)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Sql PrintSupport)
 
 # OpenCV: Xử lý ảnh + Camera + DNN (chạy model AI)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio objdetect dnn)
@@ -33,6 +33,8 @@ qt_add_executable(FacieID_UtherDashbbord
     backend/Camera.cpp
     backend/Face.h
     backend/Face.cpp
+    backend/Exporter.h
+    backend/Exporter.cpp
 )
 
 # ============================================================================
@@ -43,6 +45,7 @@ target_link_libraries(FacieID_UtherDashbbord
         Qt::Core
         Qt::Widgets
         Qt::Sql
+        Qt::PrintSupport
         ${OpenCV_LIBS}   # Tự động link tất cả module OpenCV đã tìm thấy
 )
 
