@@ -2610,9 +2610,39 @@ int main(int argc, char *argv[])
             if (Face::loadModels(detPath, recPath)) {
                 qDebug() << "[MAIN] Mô hình YuNet & SFace đã sẵn sàng.";
             } else {
-                QMessageBox::warning(&mainWindow, "Cảnh báo AI",
-                    "Không thể nạp các mô hình ONNX.\n\n"
-                    "Hãy chắc chắn các file nằm trong thư mục 'models/'.");
+                // Phân tích nguyên nhân lỗi để chẩn đoán thông minh
+                QFileInfo detInfo(detPath);
+                QFileInfo recInfo(recPath);
+                
+                QString diagMsg = "Không thể nạp các mô hình ONNX.\n\n";
+                
+                diagMsg += QString("1. Mô hình Phát hiện (YuNet):\n- Đường dẫn: %1\n- Tồn tại: %2\n- Kích thước: %3 bytes\n\n")
+                    .arg(QDir::toNativeSeparators(detPath))
+                    .arg(detInfo.exists() ? "CÓ" : "KHÔNG")
+                    .arg(detInfo.exists() ? QString::number(detInfo.size()) : "N/A");
+
+                diagMsg += QString("2. Mô hình Nhận dạng (SFace):\n- Đường dẫn: %1\n- Tồn tại: %2\n- Kích thước: %3 bytes\n\n")
+                    .arg(QDir::toNativeSeparators(recPath))
+                    .arg(recInfo.exists() ? "CÓ" : "KHÔNG")
+                    .arg(recInfo.exists() ? QString::number(recInfo.size()) : "N/A");
+
+                diagMsg += "HƯỚNG DẪN KHẮC PHỤC:\n";
+                
+                // Trường hợp 1: File không tồn tại
+                if (!detInfo.exists() || !recInfo.exists()) {
+                    diagMsg += "-> Vui lòng tạo thư mục 'models/' nằm cùng cấp với file thực thi .exe và chép đầy đủ 2 file .onnx vào đó.\n";
+                }
+                // Trường hợp 2: Lỗi Git LFS (file chỉ có 130 bytes - dạng text pointer)
+                else if (detInfo.size() < 10240 || recInfo.size() < 102400) {
+                    diagMsg += "-> PHÁT HIỆN LỖI GIT LFS: File mô hình có kích thước quá nhỏ. Bạn đã tải code từ Github mà chưa chạy 'git lfs pull' hoặc cài đặt Git LFS, dẫn đến file mô hình chỉ là file text liên kết trống. Vui lòng tải lại tệp mô hình ONNX thật (~232KB và ~38MB).\n";
+                }
+                // Trường hợp 3: Lỗi môi trường hệ thống
+                else {
+                    diagMsg += "-> Máy tính thiếu thư viện Visual C++ Redistributable (MSVC runtime). Hãy tải và cài đặt 'Visual C++ Redistributable 2015-2022' từ Microsoft để chạy được OpenCV.\n";
+                    diagMsg += "-> Tránh đặt thư mục chứa ứng dụng ở đường dẫn có ký tự Tiếng Việt có dấu (ví dụ: ổ đĩa có dấu, tên thư mục có dấu).\n";
+                }
+
+                QMessageBox::warning(&mainWindow, "Lỗi Nạp Mô Hình AI", diagMsg);
             }
 
             // ============================================================

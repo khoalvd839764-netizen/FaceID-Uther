@@ -3,6 +3,7 @@
 #include <opencv2/imgproc.hpp>     // OpenCV: xử lý ảnh (resize, cvtColor, rectangle, putText...)
 #include <opencv2/objdetect.hpp>   // OpenCV: FaceDetectorYN (YuNet), FaceRecognizerSF (SFace)
 #include <QDebug>                  // Qt: xuất log ra console
+#include <QDir>                    // Qt: thao tác với đường dẫn thư mục
 #include <cmath>                   // std::sqrt - tính căn bậc hai cho khoảng cách Euclidean
 #include <algorithm>               // std::max - lấy giá trị lớn nhất
 
@@ -68,8 +69,9 @@ namespace Face {
     {
         try {
             // Chuyển đổi từ QString (Qt) sang std::string (C++ chuẩn) để OpenCV sử dụng
-            std::string detPath = detModelPath.toStdString();
-            std::string recPath = recModelPath.toStdString();
+            // Sử dụng toLocal8Bit() để xử lý các đường dẫn thư mục có dấu Tiếng Việt trên Windows tốt hơn
+            std::string detPath = std::string(QDir::toNativeSeparators(detModelPath).toLocal8Bit().constData());
+            std::string recPath = std::string(QDir::toNativeSeparators(recModelPath).toLocal8Bit().constData());
 
             // ================================================================
             // KHỞI TẠO MÔ HÌNH PHÁT HIỆN MẶT: YuNet
